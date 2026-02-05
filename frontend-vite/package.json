@@ -1,0 +1,25 @@
+{
+  "name": "djs-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@primeuix/themes": "latest",
+    "chart.js": "^4.5.1",
+    "primeflex": "latest",
+    "primeicons": "latest",
+    "primevue": "latest",
+    "sass": "^1.97.3",
+    "vue": "latest",
+    "vue-router": "^4.6.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "latest",
+    "vite": "latest"
+  }
+}
