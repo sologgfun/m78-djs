@@ -456,7 +456,8 @@ def main():
     print("="*70 + "\n")
     
     try:
-        app.run(debug=False, host='0.0.0.0', port=8000, threaded=True)
+        port = int(os.environ.get('PORT', 8000))
+        app.run(debug=False, host='0.0.0.0', port=port, threaded=True)
     except KeyboardInterrupt:
         print("\n正在关闭服务器...")
         backtest_worker.stop()

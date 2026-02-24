@@ -35,6 +35,7 @@ data_cache/
 
 # 回测结果
 backtest_results/
+backend/backtest.db
 
 # IDE
 .vscode/
