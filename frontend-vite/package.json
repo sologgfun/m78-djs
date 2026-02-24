@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy": "npm run build && gh-pages -d dist"
   },
   "dependencies": {
     "@primeuix/themes": "latest",
@@ -20,6 +21,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "latest",
+    "gh-pages": "latest",
     "vite": "latest"
   }
 }
