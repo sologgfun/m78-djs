@@ -182,60 +182,24 @@ class BacktestEngine:
             # 限制数量以加快测试
             codes_to_load = filtered['stock_code'].tolist()[:100]
 
-        # 多线程并发获取数据
-        # 根据股票数量自动调整并发数：<50只用10线程，<200只用20线程，>=200只用30线程
         num_stocks = len(codes_to_load)
-        if num_stocks < 50:
-            max_workers = 10
-        elif num_stocks < 200:
-            max_workers = 20
-        else:
-            max_workers = 30
-        print(f"使用 {max_workers} 个线程并发下载 {num_stocks} 只股票数据...")
-        
-        def fetch_stock_data(stock_code):
-            """获取单只股票数据的函数"""
+        print(f"下载 {num_stocks} 只股票数据...")
+
+        for stock_code in tqdm(codes_to_load, desc="下载进度"):
             try:
                 df = self.data_fetcher.get_stock_daily_data(
                     stock_code, self.start_date, self.end_date
                 )
-                
                 if df is not None and len(df) >= 120:
-                    # 添加技术指标
                     df = add_all_indicators(df)
-                    return (stock_code, df, True)
+                    self.stock_data[stock_code] = df
+                    valid_stocks.append(stock_code)
                 else:
                     data_len = len(df) if df is not None else 0
-                    return (stock_code, None, False, data_len)
+                    if data_len > 0:
+                        print(f"  跳过 {stock_code}: 数据不足 ({data_len} < 120)")
             except Exception as e:
                 print(f"  获取 {stock_code} 失败: {e}")
-                return (stock_code, None, False, 0)
-        
-        # 使用线程池并发下载
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # 提交所有任务
-            future_to_code = {
-                executor.submit(fetch_stock_data, code): code 
-                for code in codes_to_load
-            }
-            
-            # 使用tqdm显示进度
-            with tqdm(total=len(codes_to_load), desc="下载进度") as pbar:
-                for future in as_completed(future_to_code):
-                    result = future.result()
-                    stock_code = result[0]
-                    
-                    if result[2]:  # 成功
-                        df = result[1]
-                        self.stock_data[stock_code] = df
-                        valid_stocks.append(stock_code)
-                    else:
-                        if len(result) > 3:
-                            data_len = result[3]
-                            if data_len > 0:
-                                print(f"  跳过 {stock_code}: 数据不足 ({data_len} < 120)")
-                    
-                    pbar.update(1)
         
         print(f"成功加载 {len(valid_stocks)} 只股票的价格数据")
         

@@ -9,7 +9,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pywencai
+from backend.wencai_subprocess import wencai_get
 from data_fetcher import DataFetcher, is_etf_code
 
 
@@ -236,8 +236,7 @@ class StockService:
             
             df = None
             if query:
-                res = pywencai.get(question=query, query_type='stock', loop=True)
-                df = self._extract_df(res)
+                df = wencai_get(question=query, query_type='stock', loop=True)
             
             # ---------- 批量结果解析 ----------
             detail_map = {}  # code -> {pe, dividend, ratio}
@@ -281,8 +280,7 @@ class StockService:
                 for code in codes_need_fill:
                     try:
                         q2 = f"{code}的市盈率(pe)，股息率，收盘价/120日均线"
-                        res2 = pywencai.get(question=q2, query_type='stock', loop=True)
-                        df2 = self._extract_df(res2)
+                        df2 = wencai_get(question=q2, query_type='stock', loop=True)
                         if df2 is None or len(df2) == 0:
                             continue
                         cols2 = self._classify_columns(df2)
@@ -467,8 +465,7 @@ class StockService:
                 # 用 stock 类型查询，部分 ETF 也会出现在股票查询中
                 query = f"{keyword}ETF"
                 print(f"[ETF筛选] pywencai 补充: {query}")
-                res = pywencai.get(question=query, query_type='stock', loop=True)
-                df = self._extract_df(res)
+                df = wencai_get(question=query, query_type='stock', loop=True)
                 if df is not None and len(df) > 0:
                     code_col = self._find_code_col(df)
                     name_col = self._find_name_col(df)
@@ -502,8 +499,7 @@ class StockService:
             if market_cap_min > 0:
                 query += f"，总市值>{market_cap_min}亿"
                 
-            res = pywencai.get(question=query, query_type='stock', loop=True)
-            df = self._extract_df(res)
+            df = wencai_get(question=query, query_type='stock', loop=True)
             
             if df is None or len(df) == 0:
                 print("未找到符合条件的股票")
@@ -548,8 +544,7 @@ class StockService:
             )
             print(f"DJS 筛选: 调用 i问财 -> {query}")
 
-            res = pywencai.get(question=query, query_type='stock', loop=True)
-            df = self._extract_df(res)
+            df = wencai_get(question=query, query_type='stock', loop=True)
 
             if df is None or len(df) == 0:
                 print("i问财 返回空结果")
