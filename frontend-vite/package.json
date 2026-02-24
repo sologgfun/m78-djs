@@ -21,7 +21,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "latest",
-    "gh-pages": "latest",
+    "gh-pages": "^6.3.0",
     "vite": "latest"
   }
 }
