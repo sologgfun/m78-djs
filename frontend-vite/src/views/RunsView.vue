@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { API } from '../api';
+import { store } from '../store';
 
 import Button from 'primevue/button';
 import DataTable from 'primevue/datatable';
@@ -183,6 +184,10 @@ const editTaskId = ref(null);
 const editTaskName = ref('');
 
 let refreshInterval = null;
+
+function isOwner(task) {
+    return store.isLoggedIn && store.user && task.user_id === store.user.id;
+}
 
 function statusSeverity(status) {
     if (status === 'completed') return 'success';
@@ -415,13 +420,15 @@ onUnmounted(() => {
                           <div class="task-item-content">
                               <div class="flex align-items-center justify-content-between mb-1">
                                   <div class="task-item-name">{{ t.name }}</div>
-                                  <div class="task-item-actions">
+                                  <div class="task-item-actions" v-if="isOwner(t)">
                                       <Button icon="pi pi-pencil" text rounded size="small" severity="secondary" @click.stop="openEditDialog(t, $event)" />
                                       <Button icon="pi pi-trash" text rounded size="small" severity="danger" @click.stop="deleteTask(t, $event)" />
                                   </div>
                               </div>
                               <div class="flex align-items-center gap-2 mb-1">
                                   <Tag :value="statusLabel(t.status)" :severity="statusSeverity(t.status)" class="text-xs px-1" />
+                                  <Tag v-if="t.is_public" value="公开" severity="info" class="text-xs px-1" />
+                                  <Tag v-else-if="isOwner(t)" value="私有" severity="secondary" class="text-xs px-1" />
                                   <span class="text-xs text-400 font-mono">{{ fmtTime(t.created_at) }}</span>
                               </div>
                               <div class="flex align-items-center justify-content-between text-xs">

@@ -11,11 +11,13 @@ import InputNumber from 'primevue/inputnumber';
 import DatePicker from 'primevue/datepicker';
 import SelectButton from 'primevue/selectbutton';
 import Slider from 'primevue/slider';
+import ToggleSwitch from 'primevue/toggleswitch';
 import { useToast } from 'primevue/usetoast';
 
 const router = useRouter();
 const toast = useToast();
 const loading = ref(false);
+const isPublic = ref(false);
 
 const modeOptions = ref([
     { label: '自选股回测', value: 'manual' },
@@ -148,7 +150,8 @@ async function createTask() {
                 ladder_down: ladders,
                 single_layer_profit: s.singleLayerProfit / 100,
                 full_clear_threshold: s.fullClearThreshold / 100,
-            }
+            },
+            is_public: isPublic.value,
         };
 
         const resp = await API.createBacktest(payload);
@@ -341,9 +344,15 @@ async function createTask() {
                    </div>
                </div>
 
-               <div class="flex gap-3 pt-2 border-top-1 border-200">
-                   <Button label="创建回测" icon="pi pi-check" severity="success" @click="createTask" />
-                   <Button label="取消" severity="secondary" text @click="router.back()" />
+               <div class="flex gap-3 pt-2 border-top-1 border-200 align-items-center justify-content-between">
+                   <div class="flex gap-3 align-items-center">
+                       <Button label="创建回测" icon="pi pi-check" severity="success" @click="createTask" />
+                       <Button label="取消" severity="secondary" text @click="router.back()" />
+                   </div>
+                   <div class="flex align-items-center gap-2">
+                       <ToggleSwitch v-model="isPublic" />
+                       <span class="text-sm text-500">{{ isPublic ? '公开结果' : '仅自己可见' }}</span>
+                   </div>
                </div>
           </div>
       </div>

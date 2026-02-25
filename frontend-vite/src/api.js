@@ -1,13 +1,17 @@
+import { store } from './store';
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
 async function request(path, options = {}) {
-  const res = await fetch(API_BASE + path, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {})
-    },
-    ...options
-  });
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {})
+  };
+  if (store.token) {
+    headers['Authorization'] = `Bearer ${store.token}`;
+  }
+
+  const res = await fetch(API_BASE + path, { ...options, headers });
 
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
@@ -18,6 +22,13 @@ async function request(path, options = {}) {
 }
 
 export const API = {
+  // 认证
+  register: (username, password) =>
+    request('/api/auth/register', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  login: (username, password) =>
+    request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  me: () => request('/api/auth/me'),
+
   healthCheck: () => request('/api/system/health'),
 
   searchStocks: (keyword) => request(`/api/stocks/search?keyword=${encodeURIComponent(keyword)}`),

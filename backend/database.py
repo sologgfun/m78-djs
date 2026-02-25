@@ -52,9 +52,23 @@ class Database:
 
         # 自动迁移：为旧表补充缺失的列
         existing = {row[1] for row in cursor.execute("PRAGMA table_info(tasks)").fetchall()}
-        for col, col_type in [('strategy', 'TEXT'), ('mode', 'TEXT'), ('screen_params', 'TEXT')]:
-            if col not in existing:
+        for col, col_type in [
+            ('strategy', 'TEXT'), ('mode', 'TEXT'), ('screen_params', 'TEXT'),
+            ('user_id', 'INTEGER'), ('is_public', 'INTEGER DEFAULT 0'),
+        ]:
+            col_name = col.split()[0] if ' ' in col else col
+            if col_name not in existing:
                 cursor.execute(f"ALTER TABLE tasks ADD COLUMN {col} {col_type}")
+
+        # 创建用户表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TEXT
+            )
+        """)
         
         # 创建结果表
         cursor.execute("""
@@ -109,8 +123,9 @@ class Database:
             INSERT OR REPLACE INTO tasks 
             (task_id, batch_id, name, stock_codes, start_date, end_date, 
              initial_capital, max_positions, config_type, status, progress, 
-             message, created_at, started_at, completed_at, strategy)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             message, created_at, started_at, completed_at, strategy,
+             user_id, is_public)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             task['task_id'],
             task.get('batch_id'),
@@ -127,7 +142,9 @@ class Database:
             task['created_at'],
             task.get('started_at'),
             task.get('completed_at'),
-            json.dumps(task.get('strategy')) if task.get('strategy') else None
+            json.dumps(task.get('strategy')) if task.get('strategy') else None,
+            task.get('user_id'),
+            1 if task.get('is_public') else 0
         ))
         
         conn.commit()
@@ -221,17 +238,24 @@ class Database:
             return task
         return None
     
-    def get_all_tasks(self, limit=100):
-        """获取所有任务"""
+    def get_all_tasks(self, limit=100, user_id=None):
+        """获取任务列表。已登录用户看到自己的任务+公开任务；访客只看公开任务。"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
-        cursor.execute("""
-            SELECT * FROM tasks 
-            ORDER BY created_at DESC 
-            LIMIT ?
-        """, (limit,))
+        if user_id is not None:
+            cursor.execute("""
+                SELECT * FROM tasks
+                WHERE user_id = ? OR is_public = 1
+                ORDER BY created_at DESC LIMIT ?
+            """, (user_id, limit))
+        else:
+            cursor.execute("""
+                SELECT * FROM tasks
+                WHERE is_public = 1
+                ORDER BY created_at DESC LIMIT ?
+            """, (limit,))
         
         rows = cursor.fetchall()
         conn.close()
@@ -338,3 +362,42 @@ class Database:
             'pending': pending_tasks,
             'failed': failed_tasks
         }
+
+    # ==================== 用户相关 ====================
+
+    def create_user(self, username, password_hash):
+        """创建用户，返回 user_id；用户名已存在时返回 None"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO users (username, password_hash, created_at)
+                VALUES (?, ?, ?)
+            """, (username, password_hash, datetime.now().isoformat()))
+            conn.commit()
+            uid = cursor.lastrowid
+            return uid
+        except sqlite3.IntegrityError:
+            return None
+        finally:
+            conn.close()
+
+    def get_user_by_username(self, username):
+        """按用户名查找用户"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def get_user_by_id(self, user_id):
+        """按 id 查找用户"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, username, created_at FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None

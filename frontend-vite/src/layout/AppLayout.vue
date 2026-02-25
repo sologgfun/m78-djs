@@ -1,22 +1,34 @@
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { API } from '../api';
+import { store } from '../store';
 import Toast from 'primevue/toast';
+import Button from 'primevue/button';
 
 const router = useRouter();
 const route = useRoute();
 const systemReady = ref(false);
 
-const menuItems = [
-  { label: '回测大厅', route: '/' },
-  { label: '模拟器', route: '/simulator' },
-  { label: '新建回测', route: '/new', highlight: true }
-];
+const menuItems = computed(() => {
+  const items = [
+    { label: '回测大厅', route: '/' },
+    { label: '模拟器', route: '/simulator' },
+  ];
+  if (store.isLoggedIn) {
+    items.push({ label: '新建回测', route: '/new', highlight: true });
+  }
+  return items;
+});
 
 function navigate(path) {
   router.push(path);
+}
+
+function handleLogout() {
+  store.logout();
+  router.push('/login');
 }
 
 onMounted(async () => {
@@ -57,11 +69,22 @@ onMounted(async () => {
                 </nav>
             </div>
             
-            <div class="gh-header-actions">
-                <span class="text-xs text-white-alpha-70 mr-2 flex align-items-center gap-1">
+            <div class="gh-header-actions flex align-items-center gap-3">
+                <span class="text-xs text-white-alpha-70 flex align-items-center gap-1">
                     <i class="pi pi-circle-fill" style="font-size: 8px" :class="systemReady ? 'text-green-500' : 'text-red-500'"></i>
                     {{ systemReady ? '服务正常' : '离线' }}
                 </span>
+                <template v-if="store.isLoggedIn">
+                    <span class="text-xs text-white-alpha-90 font-medium">
+                        <i class="pi pi-user mr-1" style="font-size: 11px"></i>{{ store.user?.username }}
+                    </span>
+                    <Button label="退出" icon="pi pi-sign-out" size="small" text
+                            class="user-logout-btn" @click="handleLogout" />
+                </template>
+                <template v-else>
+                    <Button label="登录" icon="pi pi-sign-in" size="small" text
+                            class="user-logout-btn" @click="navigate('/login')" />
+                </template>
             </div>
         </div>
     </header>
@@ -132,5 +155,15 @@ onMounted(async () => {
 .gh-nav-item.active {
     color: #fff;
     font-weight: 600;
+}
+
+.user-logout-btn {
+    color: rgba(255, 255, 255, 0.75) !important;
+    font-size: 12px !important;
+    padding: 4px 8px !important;
+}
+.user-logout-btn:hover {
+    color: #fff !important;
+    background-color: rgba(255, 255, 255, 0.1) !important;
 }
 </style>

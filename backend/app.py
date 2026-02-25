@@ -3,10 +3,13 @@
 """
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from werkzeug.security import generate_password_hash, check_password_hash
 import threading
 import queue
 import uuid
-from datetime import datetime
+import jwt
+from datetime import datetime, timedelta, timezone
+from functools import wraps
 import sys
 import os
 
@@ -16,6 +19,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.database import Database
 from backend.backtest_worker import BacktestWorker
 from backend.stock_service import StockService
+
+JWT_SECRET = os.environ.get('JWT_SECRET', 'm78-djs-secret-key-2024')
+JWT_EXPIRY_HOURS = 72
 
 # 生产环境：若 frontend-vite/dist 存在，则由 Flask 托管前端静态资源
 FRONTEND_DIST_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend-vite", "dist")
@@ -27,6 +33,88 @@ db = Database()
 stock_service = StockService()
 backtest_queue = queue.Queue()
 backtest_worker = BacktestWorker(backtest_queue, db)
+
+
+# ==================== 认证辅助 ====================
+
+def get_current_user():
+    """从 Authorization header 解析 JWT，返回 user_id（访客返回 None）"""
+    auth = request.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '):
+        return None
+    token = auth[7:]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        return payload.get('user_id')
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        return None
+
+
+def login_required(f):
+    """装饰器：强制要求登录"""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        uid = get_current_user()
+        if uid is None:
+            return jsonify({'success': False, 'error': '请先登录'}), 401
+        request._user_id = uid
+        return f(*args, **kwargs)
+    return wrapper
+
+
+# ==================== 认证API ====================
+
+@app.route('/api/auth/register', methods=['POST'])
+def auth_register():
+    """用户注册"""
+    data = request.json or {}
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
+    if not username or len(username) < 2:
+        return jsonify({'success': False, 'error': '用户名至少2个字符'}), 400
+    if len(password) < 4:
+        return jsonify({'success': False, 'error': '密码至少4个字符'}), 400
+
+    pw_hash = generate_password_hash(password)
+    user_id = db.create_user(username, pw_hash)
+    if user_id is None:
+        return jsonify({'success': False, 'error': '用户名已存在'}), 409
+
+    token = jwt.encode(
+        {'user_id': user_id, 'username': username, 'exp': datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRY_HOURS)},
+        JWT_SECRET, algorithm='HS256'
+    )
+    return jsonify({'success': True, 'token': token, 'user': {'id': user_id, 'username': username}})
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def auth_login():
+    """用户登录"""
+    data = request.json or {}
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
+
+    user = db.get_user_by_username(username)
+    if not user or not check_password_hash(user['password_hash'], password):
+        return jsonify({'success': False, 'error': '用户名或密码错误'}), 401
+
+    token = jwt.encode(
+        {'user_id': user['id'], 'username': user['username'], 'exp': datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRY_HOURS)},
+        JWT_SECRET, algorithm='HS256'
+    )
+    return jsonify({'success': True, 'token': token, 'user': {'id': user['id'], 'username': user['username']}})
+
+
+@app.route('/api/auth/me', methods=['GET'])
+def auth_me():
+    """获取当前登录用户信息"""
+    uid = get_current_user()
+    if uid is None:
+        return jsonify({'success': False, 'error': '未登录'}), 401
+    user = db.get_user_by_id(uid)
+    if not user:
+        return jsonify({'success': False, 'error': '用户不存在'}), 404
+    return jsonify({'success': True, 'user': user})
 
 
 # ==================== 股票相关API ====================
@@ -110,7 +198,10 @@ def get_djs_stocks():
 
 @app.route('/api/backtest/create', methods=['POST'])
 def create_backtest():
-    """创建回测任务"""
+    """创建回测任务（需登录）"""
+    uid = get_current_user()
+    if uid is None:
+        return jsonify({'success': False, 'error': '请先登录'}), 401
     try:
         data = request.json
         
@@ -123,19 +214,17 @@ def create_backtest():
             'end_date': data.get('end_date', '2025-12-31'),
             'initial_capital': data.get('initial_capital', 200000),
             'max_positions': data.get('max_positions', 5),
-            # 支持前端传入自定义策略参数；兼容旧的 config_type
             'strategy': data.get('strategy', None),
             'config_type': data.get('config_type', 'balanced'),
-            'mode': data.get('mode', 'manual'),  # manual or auto_screen
-            'screen_params': data.get('screen_params', {}), # e.g. {pe_max: 20, dividend_min: 3}
+            'mode': data.get('mode', 'manual'),
+            'screen_params': data.get('screen_params', {}),
             'created_at': datetime.now().isoformat(),
-            'status': 'pending'
+            'status': 'pending',
+            'user_id': uid,
+            'is_public': data.get('is_public', False),
         }
         
-        # 保存到数据库
         db.save_task(task)
-        
-        # 添加到队列
         backtest_queue.put(task)
         
         return jsonify({
@@ -202,9 +291,10 @@ def create_batch_backtest():
 
 @app.route('/api/backtest/tasks', methods=['GET'])
 def get_tasks():
-    """获取所有回测任务"""
+    """获取回测任务列表（已登录看自己+公开；访客只看公开）"""
     try:
-        tasks = db.get_all_tasks()
+        uid = get_current_user()
+        tasks = db.get_all_tasks(user_id=uid)
         return jsonify({
             'success': True,
             'data': tasks,
@@ -241,31 +331,28 @@ def get_task(task_id):
 
 @app.route('/api/backtest/result/<task_id>', methods=['GET'])
 def get_result(task_id):
-    """获取回测结果"""
+    """获取回测结果（私有任务仅归属者可看）"""
     try:
+        task = db.get_task(task_id)
+        if not task:
+            return jsonify({'success': False, 'error': '任务不存在'}), 404
+        uid = get_current_user()
+        if not task.get('is_public') and task.get('user_id') is not None and task.get('user_id') != uid:
+            return jsonify({'success': False, 'error': '无权查看'}), 403
+
         result = db.get_result(task_id)
         if result:
-            # 默认只返回：整体统计 + 股票结果表（避免 payload 过大导致前端/网络不稳定）
             basic = {
                 'task_id': result.get('task_id'),
                 'overall_stats': result.get('overall_stats', {}),
                 'stock_results': result.get('stock_results', []),
                 'created_at': result.get('created_at')
             }
-            return jsonify({
-                'success': True,
-                'data': basic
-            })
+            return jsonify({'success': True, 'data': basic})
         else:
-            return jsonify({
-                'success': False,
-                'error': '结果不存在'
-            }), 404
+            return jsonify({'success': False, 'error': '结果不存在'}), 404
     except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/backtest/result/<task_id>/details', methods=['GET'])
@@ -346,37 +433,41 @@ def get_batch_results(batch_id):
 
 @app.route('/api/backtest/delete/<task_id>', methods=['DELETE'])
 def delete_task(task_id):
-    """删除回测任务"""
+    """删除回测任务（仅归属者可删）"""
+    uid = get_current_user()
+    if uid is None:
+        return jsonify({'success': False, 'error': '请先登录'}), 401
     try:
+        task = db.get_task(task_id)
+        if not task:
+            return jsonify({'success': False, 'error': '任务不存在'}), 404
+        if task.get('user_id') is not None and task['user_id'] != uid:
+            return jsonify({'success': False, 'error': '无权操作'}), 403
         db.delete_task(task_id)
-        return jsonify({
-            'success': True,
-            'message': '任务已删除'
-        })
+        return jsonify({'success': True, 'message': '任务已删除'})
     except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/backtest/update/<task_id>', methods=['PUT'])
 def update_task(task_id):
-    """更新回测任务（名称等）"""
+    """更新回测任务（名称等，仅归属者可改）"""
+    uid = get_current_user()
+    if uid is None:
+        return jsonify({'success': False, 'error': '请先登录'}), 401
     try:
+        task = db.get_task(task_id)
+        if not task:
+            return jsonify({'success': False, 'error': '任务不存在'}), 404
+        if task.get('user_id') is not None and task['user_id'] != uid:
+            return jsonify({'success': False, 'error': '无权操作'}), 403
         data = request.json
         name = data.get('name')
         if name:
             db.update_task_name(task_id, name)
-        return jsonify({
-            'success': True,
-            'message': '任务已更新'
-        })
+        return jsonify({'success': True, 'message': '任务已更新'})
     except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 # ==================== 统计API ====================
 
