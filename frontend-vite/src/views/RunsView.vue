@@ -639,13 +639,6 @@ onUnmounted(() => {
                      <span v-else class="text-400">-</span>
                  </template>
              </Column>
-             <Column field="dividend_yield" header="股息率" style="min-width: 60px">
-                 <template #body="{ data }">
-                     <span v-if="data.dividend_yield">{{ fmtNum(data.dividend_yield) }}%</span>
-                     <span v-else class="text-400">-</span>
-                 </template>
-             </Column>
-
              <!-- ===== 盈亏结果 ===== -->
              <Column field="profit_amount" header="本笔盈亏" style="min-width: 85px">
                  <template #body="{ data }">
@@ -681,16 +674,6 @@ onUnmounted(() => {
              <Column field="holding_days" header="耗时" style="min-width: 60px">
                  <template #body="{ data }">
                      <span v-if="data.holding_days !== undefined && data.holding_days !== null">{{ data.holding_days }}天</span>
-                     <span v-else class="text-400">-</span>
-                 </template>
-             </Column>
-             <Column field="cumulative_pnl" header="累计盈亏" style="min-width: 85px">
-                 <template #body="{ data }">
-                     <span v-if="data.cumulative_pnl !== undefined && data.cumulative_pnl !== null"
-                           :class="data.cumulative_pnl > 0 ? 'text-green-500' : (data.cumulative_pnl < 0 ? 'text-red-500' : '')"
-                           class="font-bold">
-                         {{ fmtNum(data.cumulative_pnl) }}
-                     </span>
                      <span v-else class="text-400">-</span>
                  </template>
              </Column>
