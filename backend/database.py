@@ -43,9 +43,18 @@ class Database:
                 message TEXT,
                 created_at TEXT,
                 started_at TEXT,
-                completed_at TEXT
+                completed_at TEXT,
+                strategy TEXT,
+                mode TEXT,
+                screen_params TEXT
             )
         """)
+
+        # 自动迁移：为旧表补充缺失的列
+        existing = {row[1] for row in cursor.execute("PRAGMA table_info(tasks)").fetchall()}
+        for col, col_type in [('strategy', 'TEXT'), ('mode', 'TEXT'), ('screen_params', 'TEXT')]:
+            if col not in existing:
+                cursor.execute(f"ALTER TABLE tasks ADD COLUMN {col} {col_type}")
         
         # 创建结果表
         cursor.execute("""
