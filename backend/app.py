@@ -25,7 +25,7 @@ JWT_EXPIRY_HOURS = 72
 
 # 生产环境：若 frontend-vite/dist 存在，则由 Flask 托管前端静态资源
 FRONTEND_DIST_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend-vite", "dist")
-app = Flask(__name__, static_folder=FRONTEND_DIST_DIR if os.path.isdir(FRONTEND_DIST_DIR) else None, static_url_path="/")
+app = Flask(__name__, static_folder=None)
 CORS(app)  # 允许跨域请求
 
 # 初始化服务
