@@ -55,6 +55,66 @@ def calculate_atr_percent(df, period=14):
     return atr_percent
 
 
+def calculate_rsi(df, period=14):
+    """计算RSI（相对强弱指标）"""
+    delta = df['close'].diff()
+    gain = delta.clip(lower=0)
+    loss = (-delta).clip(lower=0)
+    avg_gain = gain.rolling(window=period, min_periods=period).mean()
+    avg_loss = loss.rolling(window=period, min_periods=period).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+
+def calculate_bollinger_bands(df, period=20, std_dev=2):
+    """计算布林带（中轨、上轨、下轨）"""
+    mid = df['close'].rolling(window=period).mean()
+    std = df['close'].rolling(window=period).std()
+    upper = mid + std_dev * std
+    lower = mid - std_dev * std
+    return mid, upper, lower
+
+
+def calculate_macd(df, fast=12, slow=26, signal=9):
+    """计算MACD（DIF、DEA、MACD柱）"""
+    ema_fast = df['close'].ewm(span=fast, adjust=False).mean()
+    ema_slow = df['close'].ewm(span=slow, adjust=False).mean()
+    dif = ema_fast - ema_slow
+    dea = dif.ewm(span=signal, adjust=False).mean()
+    macd_hist = 2 * (dif - dea)
+    return dif, dea, macd_hist
+
+
+def detect_macd_top_divergence(df, lookback=60):
+    """
+    检测MACD顶背离：股价创新高但MACD DIF未创新高。
+    返回布尔 Series，True 表示当日出现顶背离信号。
+    """
+    close = df['close']
+    dif = df['macd_dif']
+    result = pd.Series(False, index=df.index)
+
+    for i in range(lookback, len(df)):
+        window_close = close.iloc[i - lookback:i + 1]
+        window_dif = dif.iloc[i - lookback:i + 1]
+
+        if pd.isna(window_dif.iloc[-1]):
+            continue
+
+        current_close = window_close.iloc[-1]
+        current_dif = window_dif.iloc[-1]
+        prev_high_close = window_close.iloc[:-1].max()
+        prev_high_idx = window_close.iloc[:-1].idxmax()
+
+        if current_close >= prev_high_close:
+            prev_dif_at_high = dif.loc[prev_high_idx] if prev_high_idx in dif.index else np.nan
+            if pd.notna(prev_dif_at_high) and current_dif < prev_dif_at_high:
+                result.iloc[i] = True
+
+    return result
+
+
 def add_all_indicators(df, ma_periods=[60, 120]):
     """
     为数据框添加所有技术指标
@@ -77,8 +137,17 @@ def add_all_indicators(df, ma_periods=[60, 120]):
         df[f'ma{period}'] = calculate_ma(df, period)
     
     # 计算ATR
-    df['atr'] = calculate_atr(df)
-    df['atr_percent'] = calculate_atr_percent(df)
+    df['atr'] = calculate_atr(df, period=20)
+    df['atr_percent'] = calculate_atr_percent(df, period=20)
+    
+    # RSI
+    df['rsi'] = calculate_rsi(df)
+    
+    # 布林带
+    df['boll_mid'], df['boll_upper'], df['boll_lower'] = calculate_bollinger_bands(df)
+    
+    # MACD
+    df['macd_dif'], df['macd_dea'], df['macd_hist'] = calculate_macd(df)
     
     return df
 

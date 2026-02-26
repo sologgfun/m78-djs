@@ -21,9 +21,16 @@ class Database:
         """确保目录存在"""
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
     
+    def _connect(self):
+        """创建数据库连接（统一超时 + WAL 模式）"""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        return conn
+
     def _init_db(self):
         """初始化数据库"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
         
         # 创建任务表
@@ -116,7 +123,7 @@ class Database:
     
     def save_task(self, task):
         """保存任务"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -152,7 +159,7 @@ class Database:
     
     def update_task_status(self, task_id, status, progress=None, message=None):
         """更新任务状态"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
         
         updates = ['status = ?']
@@ -186,7 +193,7 @@ class Database:
     
     def update_task_name(self, task_id, name):
         """更新任务名称"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -198,7 +205,7 @@ class Database:
     
     def save_result(self, task_id, results):
         """保存回测结果"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -219,7 +226,7 @@ class Database:
     
     def get_task(self, task_id):
         """获取任务"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -240,7 +247,7 @@ class Database:
     
     def get_all_tasks(self, limit=100, user_id=None):
         """获取任务列表。已登录用户看到自己的任务+公开任务；访客只看公开任务。"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -275,7 +282,7 @@ class Database:
     
     def get_result(self, task_id):
         """获取结果"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -297,7 +304,7 @@ class Database:
     
     def get_batch_results(self, batch_id):
         """获取批量回测结果"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -324,7 +331,7 @@ class Database:
     
     def delete_task(self, task_id):
         """删除任务"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
         
         cursor.execute("DELETE FROM results WHERE task_id = ?", (task_id,))
@@ -335,7 +342,7 @@ class Database:
     
     def get_summary(self):
         """获取统计摘要"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
         
         cursor.execute("SELECT COUNT(*) FROM tasks")
@@ -367,7 +374,7 @@ class Database:
 
     def create_user(self, username, password_hash):
         """创建用户，返回 user_id；用户名已存在时返回 None"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
         try:
             cursor.execute("""
@@ -384,7 +391,7 @@ class Database:
 
     def get_user_by_username(self, username):
         """按用户名查找用户"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
@@ -394,7 +401,7 @@ class Database:
 
     def get_user_by_id(self, user_id):
         """按 id 查找用户"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT id, username, created_at FROM users WHERE id = ?", (user_id,))

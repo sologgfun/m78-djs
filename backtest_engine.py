@@ -268,6 +268,44 @@ class BacktestEngine:
         except Exception as e:
             print(f"  警告: 加载上证指数失败: {e}")
 
+    def _get_trade_extra_fast(self, date_str, stock_code, row_idx, df):
+        """快速版：获取交易附加元数据，直接用行索引避免 DataFrame 全表扫描"""
+        extra = {}
+        extra['index_price'] = self.index_data.get(date_str, 0)
+
+        row = df.iloc[row_idx]
+
+        ma120_val = round(float(row['ma120']), 2) if 'ma120' in df.columns and pd.notna(row['ma120']) else 0
+        extra['ma120'] = ma120_val
+
+        close_val = float(row['close'])
+        if ma120_val > 0:
+            extra['price_ma120_pct'] = round(close_val / ma120_val * 100, 2)
+            extra['discount_ma120'] = round((close_val / ma120_val - 1) * 100, 2)
+        else:
+            extra['price_ma120_pct'] = 0
+            extra['discount_ma120'] = 0
+
+        extra['atr_pct'] = round(float(row['atr_percent']), 2) if 'atr_percent' in df.columns and pd.notna(row.get('atr_percent')) else 0
+
+        if row_idx >= 20:
+            avg_vol_20 = df['volume'].iloc[row_idx - 20:row_idx].mean()
+            extra['volume_ratio'] = round(float(row['volume']) / avg_vol_20, 2) if avg_vol_20 > 0 else 0
+        else:
+            extra['volume_ratio'] = 0
+
+        if self.fundamentals is not None and len(self.fundamentals) > 0:
+            m = self.fundamentals[self.fundamentals['stock_code'] == stock_code]
+            if len(m) > 0 and 'dividend_yield' in m.columns:
+                val = m['dividend_yield'].iloc[0]
+                extra['dividend_yield'] = round(float(val), 2) if pd.notna(val) else 0
+            else:
+                extra['dividend_yield'] = 0
+        else:
+            extra['dividend_yield'] = 0
+
+        return extra
+
     def _get_trade_extra(self, date_str, stock_code):
         """
         获取每笔交易的附加元数据（交易专家视角）:
@@ -450,128 +488,154 @@ class BacktestEngine:
                 progress_callback(percent, f"正在回测: {date_str} ({i+1}/{total_days})")
     
     def _run_parallel_backtest(self, trading_days, progress_callback):
-        """并发回测（用户选股模式，每只股票独立）"""
+        """并发回测（用户选股模式，每只股票独立）— 性能优化版"""
         num_stocks = len(self.qualified_stocks)
-        max_workers = min(10, num_stocks)  # 最多10个并发
-        print(f"使用 {max_workers} 个线程并发回测...")
+        print(f"回测 {num_stocks} 只股票（逐只顺序执行，内部用 numpy 加速）...")
         print("注意：每只股票独立回测，不记录每日资产统计（因为资金独立）")
-        
-        completed_stocks = 0
-        total_progress_lock = __import__('threading').Lock()
-        
-        def backtest_single_stock(stock_code):
-            """回测单只股票"""
-            # 为该股票创建独立的Portfolio
+
+        strategy = self.strategy
+
+        for si, stock_code in enumerate(tqdm(self.qualified_stocks, desc="回测进度")):
             stock_portfolio = Portfolio(100000, self.portfolio.commission_rate, self.portfolio.stamp_tax)
             stock_name = self._lookup_stock_name(stock_code)
-            
-            # 逐日回测该股票
+
+            if stock_code not in self.stock_data:
+                continue
+
+            df = self.stock_data[stock_code]
+            date_idx_map = self._date_index_cache.get(stock_code, {})
+
+            close_arr = df['close'].values
+            ma120_arr = df['ma120'].values if 'ma120' in df.columns else None
+
             for date_str in trading_days:
-                df_until_today = self._get_data_until_date(stock_code, date_str)
-                if df_until_today is None or len(df_until_today) < 120:
-                    continue
-                
-                # 获取当日价格
-                date_idx_map = self._date_index_cache.get(stock_code, {})
                 end_idx = date_idx_map.get(date_str)
-                if not end_idx or end_idx <= 0:
+                if not end_idx or end_idx < 120:
                     continue
-                
-                df = self.stock_data[stock_code]
-                current_price = df.iloc[end_idx - 1]['close']
-                
-                # 检查持仓的止盈和加仓
+
+                idx = end_idx - 1
+                current_price = float(close_arr[idx])
+                current_ma120 = float(ma120_arr[idx]) if ma120_arr is not None else None
+
                 if stock_code in stock_portfolio.positions:
                     pm = stock_portfolio.positions[stock_code]
-                    
-                    # 止盈检查
-                    is_full_clear, layers_to_sell = self.strategy.check_take_profit_signal(df_until_today, pm)
+
+                    # --- 快速止盈判断（内联，避免 DataFrame 切片） ---
+                    is_full_clear = False
+                    layers_to_sell = []
+                    sell_reason = ''
+
+                    # 规则1: MA120 强制止盈
+                    if strategy.enable_ma120_full_clear and current_ma120 is not None and not np.isnan(current_ma120):
+                        full_clear_price = current_ma120 * strategy.full_clear
+                        if current_price >= full_clear_price:
+                            is_full_clear = True
+                            pct = int(strategy.full_clear * 100)
+                            sell_reason = f'MA120强制止盈(>{pct}%)'
+
+                    # 规则2: 动态止盈（需要完整 DataFrame，仅在开启时执行）
+                    if not is_full_clear and strategy.dynamic_take_profit and end_idx >= 26:
+                        df_until_today = df.iloc[:end_idx]
+                        boll_upper = df_until_today['boll_upper'].iloc[-1] if 'boll_upper' in df.columns else None
+                        rsi_val = df_until_today['rsi'].iloc[-1] if 'rsi' in df.columns else None
+                        macd_hist_cur = df_until_today['macd_hist'].iloc[-1] if 'macd_hist' in df.columns else None
+                        macd_hist_prev = df_until_today['macd_hist'].iloc[-2] if 'macd_hist' in df.columns and end_idx >= 2 else None
+
+                        at_boll_upper = boll_upper is not None and not pd.isna(boll_upper) and current_price >= boll_upper
+                        is_rsi_ob = rsi_val is not None and not pd.isna(rsi_val) and rsi_val >= strategy.rsi_overbought
+                        is_macd_div = False
+                        if 'macd_dif' in df.columns:
+                            from indicators import detect_macd_top_divergence
+                            div_s = detect_macd_top_divergence(df_until_today, lookback=60)
+                            if len(div_s) > 0 and div_s.iloc[-1]:
+                                is_macd_div = True
+                        is_macd_turn = (macd_hist_cur is not None and macd_hist_prev is not None
+                                        and not pd.isna(macd_hist_cur) and not pd.isna(macd_hist_prev)
+                                        and macd_hist_prev > 0 and macd_hist_cur <= 0)
+
+                        if at_boll_upper and (is_rsi_ob or is_macd_div or is_macd_turn):
+                            is_full_clear = True
+                            details = []
+                            if is_rsi_ob: details.append(f'RSI={rsi_val:.0f}')
+                            if is_macd_div: details.append('MACD顶背离')
+                            if is_macd_turn: details.append('MACD翻负')
+                            sell_reason = f'动态止盈(BOLL上轨+{"+".join(details)})'
+
+                    # 规则3: 单层止盈
+                    if not is_full_clear:
+                        for layer in pm.layers:
+                            if layer.profit_rate(current_price) >= strategy.single_profit:
+                                layers_to_sell.append(layer.layer_index)
+                        if layers_to_sell:
+                            pct = int(strategy.single_profit * 100)
+                            sell_reason = f'单层止盈({pct}%)'
+
                     if is_full_clear:
-                        extra = self._get_trade_extra(date_str, stock_code)
+                        extra = self._get_trade_extra_fast(date_str, stock_code, idx, df)
+                        extra['sell_reason'] = sell_reason
                         stock_portfolio.sell(date_str, stock_code, current_price, sell_all=True, **extra)
                     else:
                         for layer_idx in layers_to_sell:
-                            extra = self._get_trade_extra(date_str, stock_code)
+                            extra = self._get_trade_extra_fast(date_str, stock_code, idx, df)
+                            extra['sell_reason'] = sell_reason
                             stock_portfolio.sell(date_str, stock_code, current_price, layer_index=layer_idx, **extra)
-                    
-                    # 加仓检查
+
+                    # --- 快速加仓判断（内联） ---
                     if stock_code in stock_portfolio.positions:
                         pm = stock_portfolio.positions[stock_code]
-                        add_signals = self.strategy.check_add_position_signal(df_until_today, pm)
-                        for layer_idx, target_price, fund_ratio in add_signals:
-                            amount = self.strategy.calculate_position_size(100000, fund_ratio, current_price)
-                            extra = self._get_trade_extra(date_str, stock_code)
-                            stock_portfolio.buy(date_str, stock_code, stock_name, current_price, 
-                                              amount, layer_idx, target_profit_rate=self.strategy.single_profit, **extra)
-                
-                # 检查入场机会
+                        if not pm.is_empty() and pm.entry_ma120 is not None:
+                            ma120_ref = pm.entry_ma120
+                            for i, (ratio, fund_ratio) in enumerate(strategy.ladder_down):
+                                if i == 0 or pm.has_layer(i):
+                                    continue
+                                if current_price <= ma120_ref * ratio:
+                                    amount = strategy.calculate_position_size(100000, fund_ratio, current_price)
+                                    extra = self._get_trade_extra_fast(date_str, stock_code, idx, df)
+                                    stock_portfolio.buy(date_str, stock_code, stock_name, current_price,
+                                                        amount, i, target_profit_rate=strategy.single_profit, **extra)
+
+                # --- 快速入场判断（内联） ---
                 if stock_code not in stock_portfolio.positions:
-                    is_entry, entry_price, ma120_ref, layer_idx = self.strategy.check_entry_signal(df_until_today, None, stock_code)
-                    if is_entry:
-                        first_layer_fund_ratio = self.strategy.ladder_down[0][1] if self.strategy.ladder_down else 0.1
-                        amount = self.strategy.calculate_position_size(100000, first_layer_fund_ratio, current_price)
-                        extra = self._get_trade_extra(date_str, stock_code)
-                        stock_portfolio.buy(date_str, stock_code, stock_name, current_price, 
-                                          amount, layer_idx, ma120_ref, target_profit_rate=self.strategy.single_profit, **extra)
-            
+                    if current_ma120 is not None and not np.isnan(current_ma120):
+                        threshold = current_ma120 * strategy.entry_threshold
+                        if current_price <= threshold:
+                            first_fund = strategy.ladder_down[0][1] if strategy.ladder_down else 0.1
+                            amount = strategy.calculate_position_size(100000, first_fund, current_price)
+                            extra = self._get_trade_extra_fast(date_str, stock_code, idx, df)
+                            stock_portfolio.buy(date_str, stock_code, stock_name, current_price,
+                                                amount, 0, current_ma120, target_profit_rate=strategy.single_profit, **extra)
+
             # 计算未完成交易盈亏
             last_date = trading_days[-1] if trading_days else None
             if last_date:
-                date_idx_map = self._date_index_cache.get(stock_code, {})
-                end_idx = date_idx_map.get(last_date)
-                if end_idx and end_idx > 0:
-                    last_price = df.iloc[end_idx - 1]['close']
+                last_end_idx = date_idx_map.get(last_date)
+                if last_end_idx and last_end_idx > 0:
+                    last_price = float(close_arr[last_end_idx - 1])
                     for trade in stock_portfolio.trades:
                         if trade['action'] == 'BUY':
-                            buy_date = trade['date']
-                            layer_index = trade['layer_index']
                             has_sell = any(
                                 t['action'] in ['SELL_LAYER', 'SELL_ALL'] and
-                                t.get('buy_date') == buy_date and
-                                t.get('layer_index') == layer_index
+                                t.get('buy_date') == trade['date'] and
+                                t.get('layer_index') == trade['layer_index']
                                 for t in stock_portfolio.trades
                             )
                             if not has_sell:
                                 buy_price = trade['price']
                                 shares = trade['shares']
-                                profit_amount = (last_price - buy_price) * shares
-                                profit_rate = (last_price - buy_price) / buy_price
                                 trade['uncompleted_price'] = last_price
-                                trade['uncompleted_profit'] = profit_amount
-                                trade['uncompleted_profit_rate'] = profit_rate
-            
-            # 更新进度
-            nonlocal completed_stocks
-            with total_progress_lock:
-                completed_stocks += 1
-                if progress_callback:
-                    percent = int(40 + (completed_stocks / num_stocks) * 40)
-                    progress_callback(percent, f"已完成 {completed_stocks}/{num_stocks} 只股票")
-            
-            return (stock_code, stock_portfolio)
-        
-        # 使用线程池并发回测
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_code = {
-                executor.submit(backtest_single_stock, code): code 
-                for code in self.qualified_stocks
-            }
-            
-            with tqdm(total=num_stocks, desc="并发回测进度") as pbar:
-                for future in as_completed(future_to_code):
-                    stock_code, stock_portfolio = future.result()
-                    # 合并结果到主portfolio
-                    self.portfolio.trades.extend(stock_portfolio.trades)
-                    if stock_code in stock_portfolio.positions:
-                        self.portfolio.positions[stock_code] = stock_portfolio.positions[stock_code]
-                    
-                    pbar.update(1)
-        
-        # 并发回测完成后，生成简单的每日统计（仅用于前端展示）
-        # 因为每只股票是独立资金，所以不计算整体资金曲线
+                                trade['uncompleted_profit'] = (last_price - buy_price) * shares
+                                trade['uncompleted_profit_rate'] = (last_price - buy_price) / buy_price
+
+            self.portfolio.trades.extend(stock_portfolio.trades)
+            if stock_code in stock_portfolio.positions:
+                self.portfolio.positions[stock_code] = stock_portfolio.positions[stock_code]
+
+            if progress_callback:
+                percent = int(40 + ((si + 1) / num_stocks) * 40)
+                progress_callback(percent, f"已完成 {si + 1}/{num_stocks} 只股票")
+
         print("\n生成每日统计数据...")
         for date_str in trading_days:
-            # 简单记录：每只股票独立，总资产=初始资金
             self.portfolio.daily_stats.append({
                 'date': date_str,
                 'cash': self.portfolio.initial_capital,
@@ -669,18 +733,18 @@ class BacktestEngine:
                 continue
             
             # 检查止盈信号
-            is_full_clear, layers_to_sell = self.strategy.check_take_profit_signal(
+            is_full_clear, layers_to_sell, sell_reason = self.strategy.check_take_profit_signal(
                 df_until_today, pm
             )
             
             if is_full_clear:
-                # 全仓清空
                 extra = self._get_trade_extra(date_str, stock_code)
+                extra['sell_reason'] = sell_reason
                 self.portfolio.sell(date_str, stock_code, current_price, sell_all=True, **extra)
             else:
-                # 单层止盈
                 for layer_idx in layers_to_sell:
                     extra = self._get_trade_extra(date_str, stock_code)
+                    extra['sell_reason'] = sell_reason
                     self.portfolio.sell(date_str, stock_code, current_price, 
                                       layer_index=layer_idx, **extra)
         

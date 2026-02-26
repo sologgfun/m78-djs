@@ -34,11 +34,16 @@ class LadderStrategy:
         # 第三阶段：梯级参数
         self.ladder_down = self.config.get('LADDER_DOWN', LADDER_DOWN)
         self.single_profit = self.config.get('SINGLE_LAYER_PROFIT', SINGLE_LAYER_PROFIT)
+        self.enable_ma120_full_clear = self.config.get('ENABLE_MA120_FULL_CLEAR', ENABLE_MA120_FULL_CLEAR)
         self.full_clear = self.config.get('FULL_CLEAR_THRESHOLD', FULL_CLEAR_THRESHOLD)
         
         # ATR动态调整
         self.use_dynamic_atr = self.config.get('USE_DYNAMIC_ATR', USE_DYNAMIC_ATR)
         self.atr_multiplier = self.config.get('ATR_MULTIPLIER', ATR_MULTIPLIER)
+        
+        # 动态止盈（布林带上轨 + RSI超买/MACD顶背离）
+        self.dynamic_take_profit = self.config.get('DYNAMIC_TAKE_PROFIT', DYNAMIC_TAKE_PROFIT)
+        self.rsi_overbought = self.config.get('RSI_OVERBOUGHT', RSI_OVERBOUGHT)
     
     def screen_stocks(self, fundamentals_df, price_data_dict):
         """
@@ -86,8 +91,7 @@ class LadderStrategy:
             if dividend < self.dividend_min:
                 continue
             
-            # 检查市值（前10%，暂时简化处理）
-            # 实际应该计算全市场分位数
+            # 检查市值
             market_cap = row.get('market_cap', 0)
             if market_cap <= 0:
                 continue
@@ -190,36 +194,73 @@ class LadderStrategy:
         """
         第三阶段：检查是否需要止盈
         
-        Parameters:
-        -----------
-        df : DataFrame
-            带有指标的价格数据
-        portfolio_manager : StockPositionManager
-            该股票的持仓管理器
-            
+        止盈规则（按优先级）：
+        1. 强制止盈：股价 >= 当日MA120 × full_clear_threshold（默认112%）
+        2. 动态止盈（可选）：触及布林带上轨 且 (RSI超买 或 MACD顶背离)
+        3. 单层止盈：单层收益率达标
+        
         Returns:
         --------
-        tuple : (是否全仓清空, [需要止盈的层级索引])
+        tuple : (是否全仓清空, [需要止盈的层级索引], 卖出原因字符串)
         """
         if portfolio_manager.is_empty():
-            return False, []
+            return False, [], ''
         
         current_price = df['close'].iloc[-1]
-        # 检查全仓清空条件
-        ma120_ref = portfolio_manager.entry_ma120
-        if ma120_ref is not None and not pd.isna(ma120_ref):
-            full_clear_price = ma120_ref * self.full_clear
-            if current_price >= full_clear_price:
-                return True, []
         
-        # 检查单层止盈
+        # 规则1：MA120 强制止盈（使用当日实时 MA120）
+        if self.enable_ma120_full_clear:
+            ma120_today = df['ma120'].iloc[-1] if 'ma120' in df.columns else None
+            if ma120_today is not None and not pd.isna(ma120_today):
+                full_clear_price = ma120_today * self.full_clear
+                if current_price >= full_clear_price:
+                    pct = int(self.full_clear * 100)
+                    return True, [], f'MA120强制止盈(>{pct}%)'
+        
+        # 规则2：动态止盈 — 布林带上轨 + (RSI超买 或 MACD顶背离)
+        if self.dynamic_take_profit and len(df) >= 26:
+            boll_upper = df['boll_upper'].iloc[-1] if 'boll_upper' in df.columns else None
+            rsi_val = df['rsi'].iloc[-1] if 'rsi' in df.columns else None
+            macd_hist = df['macd_hist'].iloc[-1] if 'macd_hist' in df.columns else None
+            macd_hist_prev = df['macd_hist'].iloc[-2] if 'macd_hist' in df.columns and len(df) >= 2 else None
+            
+            at_boll_upper = (boll_upper is not None and not pd.isna(boll_upper) 
+                            and current_price >= boll_upper)
+            is_rsi_overbought = (rsi_val is not None and not pd.isna(rsi_val) 
+                                and rsi_val >= self.rsi_overbought)
+            is_macd_divergence = False
+            if 'macd_dif' in df.columns:
+                from indicators import detect_macd_top_divergence
+                div_series = detect_macd_top_divergence(df, lookback=60)
+                if len(div_series) > 0 and div_series.iloc[-1]:
+                    is_macd_divergence = True
+            is_macd_turning = (macd_hist is not None and macd_hist_prev is not None
+                              and not pd.isna(macd_hist) and not pd.isna(macd_hist_prev)
+                              and macd_hist_prev > 0 and macd_hist <= 0)
+            
+            if at_boll_upper and (is_rsi_overbought or is_macd_divergence or is_macd_turning):
+                details = []
+                if is_rsi_overbought:
+                    details.append(f'RSI={rsi_val:.0f}')
+                if is_macd_divergence:
+                    details.append('MACD顶背离')
+                if is_macd_turning:
+                    details.append('MACD翻负')
+                reason = f'动态止盈(BOLL上轨+{"+".join(details)})'
+                return True, [], reason
+        
+        # 规则3：单层止盈
         layers_to_sell = []
         for layer in portfolio_manager.layers:
             profit_rate = layer.profit_rate(current_price)
             if profit_rate >= self.single_profit:
                 layers_to_sell.append(layer.layer_index)
         
-        return False, layers_to_sell
+        if layers_to_sell:
+            pct = int(self.single_profit * 100)
+            return False, layers_to_sell, f'单层止盈({pct}%)'
+        
+        return False, [], ''
     
     def calculate_position_size(self, available_cash, fund_ratio, current_price):
         """

@@ -220,8 +220,17 @@ class BacktestWorker(threading.Thread):
         if 'single_layer_profit' in strategy:
             config['SINGLE_LAYER_PROFIT'] = float(strategy['single_layer_profit'])
 
+        if 'enable_ma120_full_clear' in strategy:
+            config['ENABLE_MA120_FULL_CLEAR'] = bool(strategy['enable_ma120_full_clear'])
+
         if 'full_clear_threshold' in strategy:
             config['FULL_CLEAR_THRESHOLD'] = float(strategy['full_clear_threshold'])
+
+        if 'dynamic_take_profit' in strategy:
+            config['DYNAMIC_TAKE_PROFIT'] = bool(strategy['dynamic_take_profit'])
+
+        if 'rsi_overbought' in strategy:
+            config['RSI_OVERBOUGHT'] = float(strategy['rsi_overbought'])
 
         # 默认不使用 ATR 动态调整
         config.setdefault('USE_DYNAMIC_ATR', False)

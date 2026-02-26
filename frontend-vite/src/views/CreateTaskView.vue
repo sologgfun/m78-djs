@@ -78,7 +78,9 @@ const strategy = ref({
     { price: 60, fund: 40 },
   ],
   singleLayerProfit: 12,
+  enableMa120FullClear: true,
   fullClearThreshold: 112,
+  dynamicTakeProfit: false,
 });
 
 // Watch unit change to convert values approximately (optional user convenience)
@@ -149,7 +151,9 @@ async function createTask() {
                 entry_threshold: s.entryThreshold / 100,
                 ladder_down: ladders,
                 single_layer_profit: s.singleLayerProfit / 100,
+                enable_ma120_full_clear: s.enableMa120FullClear,
                 full_clear_threshold: s.fullClearThreshold / 100,
+                dynamic_take_profit: s.dynamicTakeProfit,
             },
             is_public: isPublic.value,
         };
@@ -294,16 +298,33 @@ async function createTask() {
                                <div class="param-value">{{ strategy.singleLayerProfit }}%</div>
                            </div>
 
-                           <!-- 全仓清空 -->
+                           <!-- MA120 全仓清空 -->
                            <div class="param-row">
                                <div class="param-left">
-                                   <div class="param-label">全仓清空</div>
-                                   <div class="param-hint">价格 &ge; MA120 &times;</div>
+                                   <div class="param-label">
+                                       MA120清仓
+                                       <ToggleSwitch v-model="strategy.enableMa120FullClear" class="ml-1" style="transform: scale(0.75); vertical-align: middle;" />
+                                   </div>
+                                   <div class="param-hint">当日MA120 &times;</div>
                                </div>
                                <div class="param-slider">
-                                   <Slider v-model="strategy.fullClearThreshold" :min="100" :max="150" :step="1" />
+                                   <Slider v-model="strategy.fullClearThreshold" :min="100" :max="150" :step="1" :disabled="!strategy.enableMa120FullClear" />
                                </div>
-                               <div class="param-value">{{ strategy.fullClearThreshold }}%</div>
+                               <div class="param-value" :class="{ 'text-400': !strategy.enableMa120FullClear }">{{ strategy.fullClearThreshold }}%</div>
+                           </div>
+
+                           <!-- 动态止盈 -->
+                           <div class="param-row">
+                               <div class="param-left" style="width: auto;">
+                                   <div class="param-label">动态止盈</div>
+                                   <div class="param-hint">BOLL上轨 + RSI/MACD</div>
+                               </div>
+                               <div class="flex-1 flex align-items-center gap-2">
+                                   <ToggleSwitch v-model="strategy.dynamicTakeProfit" />
+                                   <span class="text-xs text-500">
+                                       {{ strategy.dynamicTakeProfit ? '已启用：触及布林带上轨且 RSI 超买或 MACD 顶背离时止盈' : '未启用' }}
+                                   </span>
+                               </div>
                            </div>
                        </div>
 

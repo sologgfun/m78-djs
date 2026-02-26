@@ -12,6 +12,7 @@ import ProgressBar from 'primevue/progressbar';
 import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import Chart from 'primevue/chart';
+import Select from 'primevue/select';
 import { useToast } from 'primevue/usetoast';
 
 const toast = useToast();
@@ -100,6 +101,38 @@ const tradeDialogVisible = ref(false);
 const tradeDialogStock = ref(null);
 const tradeRows = ref([]);
 const loadingTrades = ref(false);
+const tradeActionFilter = ref(null);
+const tradeSellReasonFilter = ref(null);
+
+const tradeActionOptions = [
+    { label: '全部', value: null },
+    { label: '买入', value: 'BUY' },
+    { label: '卖出', value: 'SELL' },
+];
+
+const tradeSellReasonOptions = computed(() => {
+    const reasons = new Set();
+    tradeRows.value.forEach(t => {
+        if (t.sell_reason) reasons.add(t.sell_reason);
+    });
+    return [
+        { label: '全部', value: null },
+        ...Array.from(reasons).sort().map(r => ({ label: r, value: r })),
+    ];
+});
+
+const filteredTradeRows = computed(() => {
+    let rows = tradeRows.value;
+    if (tradeActionFilter.value === 'BUY') {
+        rows = rows.filter(t => t.action === 'BUY');
+    } else if (tradeActionFilter.value === 'SELL') {
+        rows = rows.filter(t => t.action !== 'BUY');
+    }
+    if (tradeSellReasonFilter.value) {
+        rows = rows.filter(t => t.sell_reason === tradeSellReasonFilter.value);
+    }
+    return rows;
+});
 
 // Chart Data
 const chartData = computed(() => {
@@ -312,21 +345,20 @@ watch(tasks, (newTasks) => {
 function getTradeDialogHeader() {
     if (!tradeDialogStock.value) return '交易明细';
     const stock = tradeDialogStock.value;
-    const count = tradeRows.value.length;
+    const total = tradeRows.value.length;
+    const shown = filteredTradeRows.value.length;
+    const countStr = shown < total ? `${shown}/${total}笔` : `${total}笔`;
     
-    // 获取日期范围
     let dateRange = '';
-    if (count > 0) {
+    if (total > 0) {
         const dates = tradeRows.value.map(t => t.date).filter(d => d);
         if (dates.length > 0) {
             const sortedDates = [...dates].sort();
-            const firstDate = sortedDates[0];
-            const lastDate = sortedDates[sortedDates.length - 1];
-            dateRange = ` (${firstDate} ~ ${lastDate})`;
+            dateRange = ` (${sortedDates[0]} ~ ${sortedDates[sortedDates.length - 1]})`;
         }
     }
     
-    return `${stock['股票'] || stock.stock_name || ''} (${stock['代码'] || stock.code || ''}) - 交易明细 [${count}笔]${dateRange}`;
+    return `${stock['股票'] || stock.stock_name || ''} (${stock['代码'] || stock.code || ''}) - 交易明细 [${countStr}]${dateRange}`;
 }
 
 // 判断买入交易是否未完成（即没有对应的卖出）
@@ -360,6 +392,8 @@ async function openTrades(row) {
   const code = (row['代码'] || row.code || '').toString();
   tradeDialogStock.value = row;
   tradeRows.value = [];
+  tradeActionFilter.value = null;
+  tradeSellReasonFilter.value = null;
   tradeDialogVisible.value = true;
   loadingTrades.value = true;
   
@@ -564,12 +598,20 @@ onUnmounted(() => {
               :header="getTradeDialogHeader()" 
               modal :style="{ width: '1300px', maxWidth: '95vw' }" class="p-fluid">
           <ProgressBar v-if="loadingTrades" mode="indeterminate" style="height: 4px" class="mb-3" />
-          <DataTable v-else :value="tradeRows" paginator :rows="15" size="small" stripedRows scrollable scrollHeight="60vh"
+          <DataTable v-else :value="filteredTradeRows" paginator :rows="15" size="small" stripedRows scrollable scrollHeight="60vh"
                      :rowClass="getTradeRowClass"
                      sortField="date" :sortOrder="-1">
              <template #empty>暂无交易记录</template>
              <template #header>
-                 <div class="text-xs text-500">最新交易在最前 (点击列标题可排序)</div>
+                 <div class="flex align-items-center justify-content-between flex-wrap gap-2">
+                     <span class="text-xs text-500">最新交易在最前 (点击列标题可排序)</span>
+                     <div class="flex align-items-center gap-2">
+                         <Select v-model="tradeActionFilter" :options="tradeActionOptions" optionLabel="label" optionValue="value"
+                                 placeholder="方向" class="text-xs" style="min-width: 90px; height: 28px;" />
+                         <Select v-model="tradeSellReasonFilter" :options="tradeSellReasonOptions" optionLabel="label" optionValue="value"
+                                 placeholder="卖出条件" class="text-xs" style="min-width: 160px; height: 28px;" />
+                     </div>
+                 </div>
              </template>
 
              <!-- ===== 基础交易信息 ===== -->
@@ -578,6 +620,14 @@ onUnmounted(() => {
                  <template #body="{ data }">
                      <Tag :value="data.action === 'BUY' ? '买入' : (data.action.includes('SELL') ? '卖出' : data.action)" 
                           :severity="data.action === 'BUY' ? 'success' : 'danger'" class="text-xs" />
+                 </template>
+             </Column>
+             <Column field="sell_reason" header="卖出条件" style="min-width: 130px">
+                 <template #body="{ data }">
+                     <span v-if="data.sell_reason" class="text-xs font-medium">
+                         <Tag :value="data.sell_reason" severity="warn" class="text-xs" style="white-space: nowrap;" />
+                     </span>
+                     <span v-else class="text-400">-</span>
                  </template>
              </Column>
              <Column field="price" header="成交价" style="min-width: 75px">

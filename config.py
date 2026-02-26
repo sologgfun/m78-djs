@@ -24,13 +24,24 @@ LADDER_DOWN = [
 
 # 向上止盈参数
 SINGLE_LAYER_PROFIT = 0.12  # 单层止盈比例 12%
-FULL_CLEAR_THRESHOLD = 1.12  # MA120 * 112% 全仓清空
+ENABLE_MA120_FULL_CLEAR = True  # 是否启用 MA120 全仓清空
+FULL_CLEAR_THRESHOLD = 1.12  # 当日MA120 * 112% 全仓清空
 
 # ATR参数
 ATR_PERIOD = 14  # ATR计算周期
 ATR_MIN_PERCENT = 1.5  # 最小ATR%要求，过滤"死鱼股"
 USE_DYNAMIC_ATR = False  # 是否使用ATR%动态调整梯度
 ATR_MULTIPLIER = 3  # ATR倍数用于动态梯度
+
+# 动态止盈参数（布林带+RSI/MACD）
+DYNAMIC_TAKE_PROFIT = False  # 是否启用动态止盈
+RSI_PERIOD = 14  # RSI 计算周期
+RSI_OVERBOUGHT = 70  # RSI 超买阈值
+BOLL_PERIOD = 20  # 布林带周期
+BOLL_STD = 2  # 布林带标准差倍数
+MACD_FAST = 12  # MACD 快线周期
+MACD_SLOW = 26  # MACD 慢线周期
+MACD_SIGNAL = 9  # MACD 信号线周期
 
 # ==================== 回测参数 ====================
 
